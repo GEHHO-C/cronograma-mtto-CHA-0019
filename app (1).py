@@ -415,7 +415,7 @@ if st.session_state.modal_rid is not None and es_editor:
             st.warning(f"⚠️ Registro previo: {prev[0]} · *{prev[1] or '(sin comentario)'}*")
         with st.form("form_ejec", clear_on_submit=True):
             fecha_ejec = st.date_input("📅 Fecha de ejecución real",
-                                       value=fp_m.date(), use_container_width=True)
+                                       value=fp_m.date())
             comentario = st.text_area("💬 Comentario",
                                       value=st.session_state.modal_com,
                                       height=100, placeholder="Observaciones...")
