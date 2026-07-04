@@ -492,9 +492,9 @@ if st.session_state.popup_rid is not None:
 if st.session_state.vista == "anual":
     encabezado(f"📅 Cronograma de mantenimiento — Anual {YEAR}")
 
-    cols_m = st.columns(6)
+    cols_m = st.columns(12)
     for i, mes in enumerate(MESES):
-        with cols_m[i % 6]:
+        with cols_m[i % 12]:
             if st.button(mes, key=f"m_{i}", use_container_width=True):
                 st.session_state.vista   = "semanal"
                 st.session_state.mes_idx = i
@@ -576,9 +576,9 @@ else:
 
     encabezado(f"🗓️ {mes_name} {YEAR} — Programación semanal")
 
-    cols_m = st.columns(6)
+    cols_m = st.columns(12)
     for i, mes in enumerate(MESES):
-        with cols_m[i % 6]:
+        with cols_m[i % 12]:
             t = "primary" if i == mes_idx else "secondary"
             if st.button(mes, key=f"sm_{i}", type=t, use_container_width=True):
                 st.session_state.mes_idx = i; st.rerun()
