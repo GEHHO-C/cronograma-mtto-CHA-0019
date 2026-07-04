@@ -1,26 +1,94 @@
 """
-Cronograma de mantenimiento - Streamlit
-========================================
+Cronograma de mantenimiento - Streamlit (con soporte móvil)
+============================================================
 AJUSTA LA SECCIÓN "CONFIGURACIÓN" con tus datos reales.
 """
 
 import sqlite3
 import datetime as dt
+import shutil, os
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Cronograma de mantenimiento", layout="wide")
+st.set_page_config(
+    page_title="Cronograma de mantenimiento",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+st.markdown("""
+<style>
+/* ── Zoom global al 55% en escritorio ─────────────────────
+   Escala toda la interfaz para que quepa más información
+   en pantalla. En móvil se mantiene al 100%.              */
+@media (min-width: 769px) {
+    .main .block-container {
+        zoom: 0.72;                 /* zoom nativo (Chrome/Edge) */
+        -moz-transform: scale(0.72);  /* Firefox fallback       */
+        -moz-transform-origin: top left;
+        transform-origin: top left;
+    }
+}
+/* ── Botones táctiles ──────────────────────────────────── */
+.stButton > button { min-height: 44px; font-size: 14px; }
+@media (max-width: 768px) {
+    .hide-mobile { display: none !important; }
+    .stButton > button { font-size: 12px; min-height: 40px; }
+}
+/* ── Tabla con scroll horizontal suave ────────────────── */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* ── Caja de comentario ────────────────────────────────── */
+.comentario-box {
+    background: #fff8e1; border-left: 4px solid #f5a623;
+    padding: 10px 14px; border-radius: 6px;
+    font-size: 13px; margin: 4px 0 8px 0;
+}
+/* ── Ancla invisible para scroll al modal ─────────────── */
+#modal-anchor { display: block; height: 0; }
+.act-card { border: 1px solid #ddd; border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 8px; background: #fff; }
+.act-card-header { font-weight: 700; font-size: 13px;
+    color: #1f6f8b; margin-bottom: 6px; }
+.badge { display: inline-block; border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 700; margin: 2px; }
+</style>
+""", unsafe_allow_html=True)
 
 # =========================================================
 # CONFIGURACIÓN
 # =========================================================
 DB             = "CHA-0019-YA.db"
+
+_DB_ORIGEN  = DB
+_DB_DESTINO = os.path.join("/tmp", DB)
+
+if not os.path.exists(_DB_DESTINO):
+    if not os.path.exists(_DB_ORIGEN):
+        st.error(f"""
+        ❌ **Base de datos no encontrada: `{DB}`**
+
+        Para que la app funcione, sube el archivo `{DB}` al repositorio de GitHub.
+
+        **Pasos:**
+        1. Ve a tu repositorio en GitHub
+        2. Haz clic en **"Add file" → "Upload files"**
+        3. Sube el archivo `{DB}` (generado por `importar_equipos.py`)
+        4. Haz clic en **"Commit changes"**
+
+        La app se actualizará automáticamente en ~1 minuto.
+        """)
+        st.stop()
+    shutil.copy2(_DB_ORIGEN, _DB_DESTINO)
+
+DB_WRITABLE = _DB_DESTINO
+
 TABLA          = "Tabla1"
 YEAR           = 2026
 COL_TECNICA    = "Técnica de Mantenimiento"
 COL_PLAN       = "Plan SAP"
 COL_ACTIVIDAD  = "Actividad"
-COL_FRECUENCIA = "FRECUENCIA PROG"   # en días
+COL_FRECUENCIA = "FRECUENCIA PROG"
 COL_EQUIPO     = "EQUIPO"
 SECCION        = "Chancado"
 
@@ -36,6 +104,7 @@ MESES = ["ENE","FEB","MAR","ABR","MAY","JUN","JUL","AGO","SET","OCT","NOV","DIC"
 DOW   = ["L","MA","MI","J","V","S","D"]
 C_PEND    = "#4a90d9"
 C_VERDE   = "#cdeede"
+C_VERDE_FG= "#1c5c3f"
 C_NARANJA = "#f5a623"
 C_ROJO    = "#e23b3b"
 C_HEADER  = "#1f6f8b"
@@ -50,11 +119,18 @@ def check_login():
         st.session_state.usuario   = ""
         st.session_state.rol       = ""
     if not st.session_state.logged_in:
-        st.title("🔐 Cronograma de mantenimiento")
-        st.markdown("---")
-        c1, c2, c3 = st.columns([1, 1.5, 1])
+        st.markdown(f"""
+        <div style="max-width:360px;margin:40px auto;padding:28px;
+                    background:#fff;border-radius:12px;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.12);">
+          <div style="background:{C_HEADER};padding:14px;border-radius:8px;
+                      text-align:center;margin-bottom:20px;">
+            <div style="color:#fff;font-size:17px;font-weight:700;">
+              🔧 Cronograma de Mantenimiento</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+        _, c2, _ = st.columns([1, 2, 1])
         with c2:
-            st.subheader("Iniciar sesión")
             user = st.text_input("Usuario")
             pwd  = st.text_input("Contraseña", type="password")
             if st.button("Entrar", type="primary", use_container_width=True):
@@ -75,7 +151,7 @@ es_editor = (st.session_state.rol == "editor")
 # =========================================================
 @st.cache_resource
 def get_conn():
-    c = sqlite3.connect(DB, check_same_thread=False)
+    c = sqlite3.connect(DB_WRITABLE, check_same_thread=False)
     c.row_factory = sqlite3.Row
     c.execute("""CREATE TABLE IF NOT EXISTS ejecuciones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,14 +164,11 @@ conn = get_conn()
 
 @st.cache_data(ttl=0)
 def load_df():
-    # Usar sqlite3 nativo para máxima compatibilidad con Python 3.14+
     cur = conn.execute(f"SELECT rowid AS rowid, * FROM {TABLA}")
     cols = [desc[0] for desc in cur.description]
     rows = cur.fetchall()
     data = [dict(zip(cols, row)) for row in rows]
     d = pd.DataFrame(data)
-    # Leer fecha base directamente de la columna "Ultimo Mtto" de la BD.
-    # Si una fila no tiene fecha, se usa el 1 de enero del año como fallback.
     if "Ultimo Mtto" in d.columns:
         d["fecha_base"] = pd.to_datetime(d["Ultimo Mtto"], errors="coerce")
         d["fecha_base"] = d["fecha_base"].fillna(pd.Timestamp(YEAR, 1, 1))
@@ -117,7 +190,7 @@ def get_equipo_nombre():
 EQUIPO_NOMBRE = get_equipo_nombre()
 
 # =========================================================
-# LÓGICA DE PROGRAMACIÓN
+# LÓGICA
 # =========================================================
 def get_ejecuciones():
     cur = conn.execute("SELECT * FROM ejecuciones")
@@ -132,7 +205,7 @@ def get_ejecuciones():
     return e
 
 def semaforo_color(pct):
-    if pct is None: return None
+    if pct is None: return C_VERDE
     if pct <= UMBRAL_VERDE:   return C_VERDE
     if pct <= UMBRAL_NARANJA: return C_NARANJA
     return C_ROJO
@@ -146,11 +219,10 @@ def generar_programacion(hoy):
 
     for _, row in df.iterrows():
         freq = int(row[COL_FRECUENCIA]); rid = row.get("rowid", row.get("id", 0))
-        base = pd.Timestamp(row["fecha_base"])
+        base = row["fecha_base"]
         ea   = ejec_all[ejec_all["id_actividad"] == rid].copy() if not ejec_all.empty else pd.DataFrame()
         bef  = max(base, ea["fecha_ejecucion"].max()) if not ea.empty else base
 
-        # ── EJECUCIONES REGISTRADAS POR EL USUARIO ───────────────
         hist = []
         if not ea.empty:
             for _, ej in ea.iterrows():
@@ -162,46 +234,21 @@ def generar_programacion(hoy):
                              "comentario": ej["comentario"],
                              "desvio_pct": (dp / freq * 100) if freq else 0})
 
-        # ── RETROCESO: último mtto + X anteriores hasta enero ──────
-        # Incluye la fecha base (último mtto real) como ejecutada,
-        # y retrocede iterativamente hasta cubrir desde enero.
-        # Todas aparecen en verde con comentario "Ejecutado correctamente".
         retro = []
-
-        # Agregar la fecha base misma (último mtto) como ejecutada
         if bef.year == YEAR:
-            retro.append({
-                "id_actividad": rid,
-                "fecha_programada": bef,
-                "estado": "ejecutado",
-                "fecha_ejecucion": bef,
-                "comentario": "Ejecutado correctamente",
-                "desvio_pct": 0.0,
-            })
+            retro.append({"id_actividad": rid, "fecha_programada": bef,
+                         "estado": "ejecutado", "fecha_ejecucion": bef,
+                         "comentario": "Ejecutado correctamente", "desvio_pct": 0.0})
+        cur_r = bef
+        for _ in range(500):
+            cur_r -= pd.Timedelta(days=freq)
+            if cur_r < year_start: break
+            ya = any(abs((h["fecha_programada"] - cur_r).days) <= 3 for h in hist)
+            if not ya:
+                retro.append({"id_actividad": rid, "fecha_programada": cur_r,
+                             "estado": "ejecutado", "fecha_ejecucion": cur_r,
+                             "comentario": "Ejecutado correctamente", "desvio_pct": 0.0})
 
-        # Retroceder iterativamente desde la base hasta enero
-        cur_retro = bef
-        s = 0
-        while s < 500:
-            cur_retro = cur_retro - pd.Timedelta(days=freq)
-            if cur_retro < year_start:
-                break
-            ya_en_hist = any(
-                abs((h["fecha_programada"] - cur_retro).days) <= 3
-                for h in hist
-            )
-            if not ya_en_hist:
-                retro.append({
-                    "id_actividad": rid,
-                    "fecha_programada": cur_retro,
-                    "estado": "ejecutado",
-                    "fecha_ejecucion": cur_retro,
-                    "comentario": "Ejecutado correctamente",
-                    "desvio_pct": 0.0,
-                })
-            s += 1
-
-        # ── EVENTOS FUTUROS: desde bef + freq hacia adelante ─────
         fut = []; cur = bef + pd.Timedelta(days=freq); s = 0
         while cur <= limite and s < 500:
             fut.append({"id_actividad": rid, "fecha_programada": cur,
@@ -214,9 +261,11 @@ def generar_programacion(hoy):
         prox  = pf[0] if pf else (fut[0] if fut else None)
 
         for e in todos:
-            e["es_ultima"] = (prox is not None and e["fecha_programada"] == prox["fecha_programada"])
-            if e["fecha_programada"].year == YEAR or (
-                    e["fecha_ejecucion"] is not None and e["fecha_ejecucion"].year == YEAR):
+            e["es_ultima"] = (prox is not None and
+                              e["fecha_programada"] == prox["fecha_programada"])
+            if (e["fecha_programada"].year == YEAR or
+                    (e["fecha_ejecucion"] is not None and
+                     e["fecha_ejecucion"].year == YEAR)):
                 prog_rows.append(e)
 
         resumen[rid] = {"ultimo_mtto": bef, "proxima": prox}
@@ -240,7 +289,8 @@ def deshacer_ultima():
     return False
 
 def generar_semanas():
-    ini = dt.date(YEAR, 1, 1); off = (ini.weekday() - 3) % 7; ini -= dt.timedelta(days=off)
+    ini = dt.date(YEAR, 1, 1); off = (ini.weekday() - 3) % 7
+    ini -= dt.timedelta(days=off)
     sems = []; fin = dt.date(YEAR, 12, 31); cur = ini
     while True:
         s = [cur + dt.timedelta(days=i) for i in range(7)]
@@ -254,9 +304,12 @@ SEMANAS = generar_semanas()
 # =========================================================
 # SESSION STATE
 # =========================================================
-for k, v in {"vista": "anual", "mes_idx": 0, "modal_rid": None,
-             "modal_fp": None, "modal_com": "", "hoy": dt.date.today()}.items():
-    if k not in st.session_state: st.session_state[k] = v
+for k, v in {"vista": "anual", "mes_idx": 0,
+             "modal_rid": None, "modal_fp": None, "modal_com": "",
+             "popup_rid": None, "popup_fecha": None,
+             "hoy": dt.date.today()}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # =========================================================
 # SIDEBAR
@@ -264,25 +317,27 @@ for k, v in {"vista": "anual", "mes_idx": 0, "modal_rid": None,
 with st.sidebar:
     rol_label = "✏️ Editor" if es_editor else "👁️ Solo lectura"
     st.markdown(f"👤 **{st.session_state.usuario}** ({rol_label})")
-    if st.button("Cerrar sesión"):
+    if st.button("Cerrar sesión", use_container_width=True):
         st.session_state.logged_in = False
         st.session_state.usuario   = ""
         st.session_state.rol       = ""
         st.rerun()
     st.markdown("---")
-    hoy_input = st.date_input("📅 Fecha actual del sistema", value=dt.date.today())
+    hoy_input = st.date_input("📅 Fecha actual", value=dt.date.today())
     st.session_state.hoy = hoy_input
     st.markdown("---")
     st.markdown("**Leyenda**")
-    for color, desc in [
-        (C_PEND,    "Programado pendiente"),
-        (C_VERDE,   "Ejecutado (≤10% desvío)"),
-        (C_NARANJA, "Advertencia (10–20% desvío)"),
-        (C_ROJO,    "Vencido / >20% desvío"),
+    for color, fg, desc in [
+        (C_PEND, "#fff",      "Programado pendiente"),
+        (C_VERDE, C_VERDE_FG, "Ejecutado (≤10% desvío)"),
+        (C_NARANJA, "#fff",   "Advertencia (10–20%)"),
+        (C_ROJO, "#fff",      "Vencido / >20%"),
     ]:
         st.markdown(
-            f'<span style="background:{color};padding:2px 12px;border-radius:3px;">'
-            f'&nbsp;</span>&nbsp;{desc}', unsafe_allow_html=True)
+            f'<span style="background:{color};color:{fg};padding:2px 10px;'
+            f'border-radius:3px;font-size:12px;">&nbsp;X&nbsp;</span>'
+            f'&nbsp;{desc}', unsafe_allow_html=True)
+        st.markdown("")
 
 prog_df, resumen = generar_programacion(hoy_input)
 
@@ -302,10 +357,45 @@ def td(t, bg="#fff", fg="#000", bold=False, w="", borde="1px solid #ccc", extra=
     return (f'<td style="background:{bg};color:{fg};border:{borde};'
             f'padding:4px 7px;text-align:center;font-weight:{fw};{mw}{extra}">{t}</td>')
 
+def badge(texto, color, fg="#fff"):
+    return (f'<span style="background:{color};color:{fg};border-radius:4px;'
+            f'padding:2px 8px;font-size:11px;font-weight:700;margin:2px;">{texto}</span>')
+
+# =========================================================
+# ENCABEZADO
+# =========================================================
+def encabezado(subtitulo):
+    st.markdown(f"""
+    <div style="background:{C_HEADER};padding:12px 16px;border-radius:8px;margin-bottom:8px;">
+      <div style="color:#b8d8ea;font-size:10px;letter-spacing:1px;text-transform:uppercase;">
+        Equipo: <strong style="color:#fff;">{EQUIPO_NOMBRE}</strong>
+        &nbsp;·&nbsp; Sección {SECCION}
+      </div>
+      <div style="color:#fff;font-size:17px;font-weight:700;margin-top:2px;">{subtitulo}</div>
+    </div>""", unsafe_allow_html=True)
+
 # =========================================================
 # MODAL DE REGISTRO
 # =========================================================
 if st.session_state.modal_rid is not None and es_editor:
+    # Ancla + scroll automático al abrir el modal
+    # El JS hace scroll hasta el formulario sin que el usuario
+    # tenga que subir manualmente la página.
+    st.markdown('<div id="modal-anchor"></div>', unsafe_allow_html=True)
+    st.components.v1.html("""
+    <script>
+      window.onload = function() {
+        // Buscar el ancla en el documento padre (iframe → parent)
+        var anchor = window.parent.document.getElementById('modal-anchor');
+        if (anchor) {
+          anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+        } else {
+          window.parent.scrollTo({top: 0, behavior: 'smooth'});
+        }
+      };
+    </script>
+    """, height=0)
+
     rid_m    = st.session_state.modal_rid
     fp_m     = st.session_state.modal_fp
     act_name = df.loc[df["rowid"] == rid_m, COL_ACTIVIDAD].iloc[0]
@@ -317,17 +407,22 @@ if st.session_state.modal_rid is not None and es_editor:
         "ORDER BY id DESC LIMIT 1",
         (int(rid_m), fp_m.strftime("%Y-%m-%d"))).fetchone()
 
-    st.info(f"📋 **{act_name}** | Programado: **{fp_m.strftime('%d/%m/%Y')}** | Frecuencia: {freq_m} días")
-    if prev:
-        st.warning(f"⚠️ Registro previo: ejecutado el **{prev[0]}** · *{prev[1] or '(sin comentario)'}*")
-
-    with st.form("form_ejec", clear_on_submit=True):
-        cf, cc = st.columns([1, 2])
-        with cf: fecha_ejec = st.date_input("📅 Fecha de ejecución real", value=fp_m.date())
-        with cc: comentario = st.text_area("💬 Comentario", value=st.session_state.modal_com, height=80)
-        b1, b2 = st.columns(2)
-        guardar  = b1.form_submit_button("💾 Guardar", type="primary", use_container_width=True)
-        cancelar = b2.form_submit_button("✖ Cancelar", use_container_width=True)
+    with st.container(border=True):
+        st.markdown("#### 📋 Registrar ejecución")
+        st.markdown(f"**{act_name}**")
+        st.caption(f"Programado: {fp_m.strftime('%d/%m/%Y')} · Frecuencia: {freq_m} días")
+        if prev:
+            st.warning(f"⚠️ Registro previo: {prev[0]} · *{prev[1] or '(sin comentario)'}*")
+        with st.form("form_ejec", clear_on_submit=True):
+            fecha_ejec = st.date_input("📅 Fecha de ejecución real",
+                                       value=fp_m.date(), use_container_width=True)
+            comentario = st.text_area("💬 Comentario",
+                                      value=st.session_state.modal_com,
+                                      height=100, placeholder="Observaciones...")
+            b1, b2 = st.columns(2)
+            guardar  = b1.form_submit_button("💾 Guardar", type="primary",
+                                             use_container_width=True)
+            cancelar = b2.form_submit_button("✖ Cancelar", use_container_width=True)
 
     if guardar:
         registrar_ejecucion(rid_m, fp_m, pd.Timestamp(fecha_ejec), comentario)
@@ -338,17 +433,41 @@ if st.session_state.modal_rid is not None and es_editor:
     st.divider()
 
 # =========================================================
-# ENCABEZADO COMÚN
+# POPUP DE COMENTARIO
 # =========================================================
-def encabezado(subtitulo):
-    st.markdown(f"""
-    <div style="background:{C_HEADER};padding:14px 20px;border-radius:8px;margin-bottom:8px;">
-      <div style="color:#b8d8ea;font-size:11px;letter-spacing:1px;text-transform:uppercase;">
-        Equipo: <strong style="color:#fff;">{EQUIPO_NOMBRE}</strong>
-        &nbsp;·&nbsp; Sección {SECCION}
-      </div>
-      <div style="color:#fff;font-size:19px;font-weight:700;margin-top:3px;">{subtitulo}</div>
-    </div>""", unsafe_allow_html=True)
+if st.session_state.popup_rid is not None:
+    rid_p   = st.session_state.popup_rid
+    fecha_p = st.session_state.popup_fecha
+    acts_p  = prog_df[prog_df["id_actividad"] == rid_p] if not prog_df.empty else prog_df
+    ev_p    = None
+    if not acts_p.empty and fecha_p is not None:
+        match = acts_p[acts_p["fecha_programada"].dt.date == fecha_p]
+        if not match.empty:
+            ev_p = match.iloc[0]
+
+    act_name_p = df.loc[df["rowid"] == rid_p, COL_ACTIVIDAD].iloc[0] \
+                 if rid_p in df["rowid"].values else "Actividad"
+
+    with st.container(border=True):
+        st.markdown("#### 🟢 Detalle de ejecución")
+        st.markdown(f"**{act_name_p}**")
+        if ev_p is not None:
+            fe_  = ev_p.get("fecha_ejecucion")
+            dev_ = ev_p.get("desvio_pct")
+            com_ = ev_p.get("comentario") or "Sin comentario"
+            st.markdown(f"📅 **Programado:** {fecha_p.strftime('%d/%m/%Y') if fecha_p else '-'}")
+            st.markdown(f"✅ **Ejecutado:** {fe_.strftime('%d/%m/%Y') if fe_ is not None else '-'}")
+            if dev_ is not None:
+                st.markdown(f"📊 **Desvío:** {dev_:.1f}%")
+            st.markdown(f"""
+            <div class="comentario-box">
+              💬 <strong>Comentario:</strong><br>{com_}
+            </div>""", unsafe_allow_html=True)
+        if st.button("✖ Cerrar", use_container_width=True):
+            st.session_state.popup_rid   = None
+            st.session_state.popup_fecha = None
+            st.rerun()
+    st.divider()
 
 # =========================================================
 # VISTA ANUAL
@@ -356,35 +475,29 @@ def encabezado(subtitulo):
 if st.session_state.vista == "anual":
     encabezado(f"📅 Cronograma de mantenimiento — Anual {YEAR}")
 
-    # Botones de mes (nativos Streamlit, siempre funcionan)
-    cols_m = st.columns(12)
+    cols_m = st.columns(6)
     for i, mes in enumerate(MESES):
-        with cols_m[i]:
-            bg_btn = C_MES
-            if st.button(mes, key=f"m_{i}", use_container_width=True,
-                         help=f"Ver programación semanal de {mes}"):
+        with cols_m[i % 6]:
+            if st.button(mes, key=f"m_{i}", use_container_width=True):
                 st.session_state.vista   = "semanal"
                 st.session_state.mes_idx = i
                 st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Tabla anual HTML (visual)
-    html = ['<div style="overflow-x:auto;font-size:12px;">',
-            '<table style="border-collapse:collapse;width:100%;">']
+    html = ['<div class="table-wrap"><table style="border-collapse:collapse;font-size:12px;">']
     html.append('<tr>')
-    for h, rs, w in [("Técnica",3,"90px"),("Plan SAP",3,"70px"),("Actividad",3,"220px"),
-                     ("Frec.",3,"55px"),("Último mtto",3,"85px"),("Próximo mtto",3,"85px")]:
+    for h, rs, w in [("Técnica",3,"88px"),("Plan SAP",3,"65px"),("Actividad",3,"200px"),
+                     ("Frec.",3,"52px"),("Último mtto",3,"82px"),("Próximo mtto",3,"82px")]:
         html.append(th(h, rs=rs, w=w))
-    html.append(th(f"Cronograma de mantenimiento — Anual {YEAR}", cs=24))
+    html.append(th(f"Cronograma — Anual {YEAR}", cs=24))
     html.append('</tr><tr>')
-    for i, mes in enumerate(MESES):
-        bg = C_MES
-        html.append(th(mes, bg=bg, cs=2))
+    for mes in MESES:
+        html.append(th(mes, bg=C_MES, cs=2))
     html.append('</tr><tr>')
     for _ in MESES:
-        html.append(th("P", bg="#3a8fb0", w="34px"))
-        html.append(th("E", bg="#3a8fb0", w="34px"))
+        html.append(th("P", bg="#3a8fb0", w="32px"))
+        html.append(th("E", bg="#3a8fb0", w="32px"))
     html.append('</tr>')
 
     for tecnica, group in df.groupby(COL_TECNICA, sort=False):
@@ -393,15 +506,15 @@ if st.session_state.vista == "anual":
             rid = r["rowid"]
             html.append('<tr>')
             if first:
-                html.append(th(tecnica, bg="#e8f5e9", fg="#1a6b2a", rs=n, w="90px"))
+                html.append(th(tecnica, bg="#e8f5e9", fg="#1a6b2a", rs=n, w="88px"))
                 first = False
             html.append(td(r[COL_PLAN], bg="#f5f5f5"))
-            html.append(td(r[COL_ACTIVIDAD], bg="#fff", w="220px", extra="text-align:left;"))
+            html.append(td(r[COL_ACTIVIDAD], bg="#fff", w="200px", extra="text-align:left;"))
             html.append(td(f"{int(r[COL_FRECUENCIA])} D", bg="#f5f5f5"))
             inf  = resumen.get(rid, {}); ult = inf.get("ultimo_mtto"); prox = inf.get("proxima")
             html.append(td(ult.strftime("%d/%m/%Y") if ult else "-", bg="#f5f5f5"))
-            html.append(td(prox["fecha_programada"].strftime("%d/%m/%Y") if prox else "-", bg="#fff3e0"))
-
+            html.append(td(prox["fecha_programada"].strftime("%d/%m/%Y") if prox else "-",
+                           bg="#fff3e0"))
             acts = prog_df[prog_df["id_actividad"] == rid] if not prog_df.empty else prog_df
             for m in range(12):
                 bp, tp = "#e7f1f8", ""
@@ -411,7 +524,7 @@ if st.session_state.vista == "anual":
                     if not ma.empty:
                         ev = ma.iloc[0]; estado = ev["estado"]
                         if estado == "ejecutado":
-                            fe = ev["fecha_ejecucion"]
+                            fe  = ev["fecha_ejecucion"]
                             col = C_VERDE if (fe is not None and fe.month == m + 1) else C_ROJO
                             bp, tp = col, "X"
                             if fe is not None and fe.month - 1 == m: be, te = col, "X"
@@ -423,6 +536,7 @@ if st.session_state.vista == "anual":
 
     html.append('</table></div>')
     st.markdown("".join(html), unsafe_allow_html=True)
+    st.caption("👆 Toca un mes para ver el detalle semanal")
 
 # =========================================================
 # VISTA SEMANAL
@@ -431,22 +545,23 @@ else:
     mes_idx  = st.session_state.mes_idx
     mes_name = MESES[mes_idx]
 
-    cb, ct, cd = st.columns([1, 4, 1])
+    cb, cd = st.columns([1, 1])
     with cb:
-        if st.button("← Vista anual"):
+        if st.button("← Vista anual", use_container_width=True):
             st.session_state.vista = "anual"; st.rerun()
-    with ct:
-        encabezado(f"🗓️ {mes_name} {YEAR} — Programación semanal")
     with cd:
         if es_editor:
-            if st.button("↩ Deshacer", type="secondary"):
-                if deshacer_ultima(): st.success("Registro eliminado."); st.rerun()
-                else: st.warning("No hay registros.")
+            if st.button("↩ Deshacer", type="secondary", use_container_width=True):
+                if deshacer_ultima():
+                    st.success("Registro eliminado."); st.rerun()
+                else:
+                    st.warning("No hay registros.")
 
-    # Selector de mes
-    cols_m = st.columns(12)
+    encabezado(f"🗓️ {mes_name} {YEAR} — Programación semanal")
+
+    cols_m = st.columns(6)
     for i, mes in enumerate(MESES):
-        with cols_m[i]:
+        with cols_m[i % 6]:
             t = "primary" if i == mes_idx else "secondary"
             if st.button(mes, key=f"sm_{i}", type=t, use_container_width=True):
                 st.session_state.mes_idx = i; st.rerun()
@@ -459,22 +574,24 @@ else:
 
         st.markdown(f"#### Semana {wi + 1}")
 
-        html = ['<div style="overflow-x:auto;font-size:11px;">',
-                '<table style="border-collapse:collapse;">']
+        html = ['<div class="table-wrap">',
+                '<table style="border-collapse:collapse;font-size:11px;">']
         html.append('<tr>')
-        for h, rs, w in [("Técnica",2,"90px"),("Plan SAP",2,"60px"),("Actividad",2,"200px"),
-                         ("Frec.",2,"50px"),("Último mtto",2,"80px"),("Próximo mtto",2,"80px")]:
+        for h, rs, w in [("Técnica",2,"85px"),("Plan SAP",2,"58px"),
+                         ("Actividad",2,"180px"),("Frec.",2,"48px"),
+                         ("Último mtto",2,"78px"),("Próximo mtto",2,"78px")]:
             html.append(th(h, rs=rs, w=w))
         for d in semana:
-            bg = C_MES
-            html.append(th(f"{DOW[d.weekday()]}<br>{d.strftime('%d/%m/%Y')}", bg=bg, cs=2))
+            html.append(th(f"{DOW[d.weekday()]}<br>{d.strftime('%d/%m/%Y')}",
+                           bg=C_MES, cs=2))
         html.append('</tr><tr>')
         for _ in semana:
-            html.append(th("P", bg="#3a8fb0", w="32px"))
-            html.append(th("E", bg="#3a8fb0", w="32px"))
+            html.append(th("P", bg="#3a8fb0", w="30px"))
+            html.append(th("E", bg="#3a8fb0", w="30px"))
         html.append('</tr>')
 
-        botones_semana = []
+        botones_reg   = []
+        botones_popup = []
 
         for tecnica, group in df.groupby(COL_TECNICA, sort=False):
             n = len(group); first = True
@@ -482,21 +599,24 @@ else:
                 rid = r["rowid"]
                 html.append('<tr>')
                 if first:
-                    html.append(th(tecnica, bg="#e8f5e9", fg="#1a6b2a", rs=n, w="90px"))
+                    html.append(th(tecnica, bg="#e8f5e9", fg="#1a6b2a", rs=n, w="85px"))
                     first = False
                 html.append(td(r[COL_PLAN], bg="#f5f5f5"))
-                html.append(td(r[COL_ACTIVIDAD], bg="#fff", w="200px", extra="text-align:left;"))
+                html.append(td(r[COL_ACTIVIDAD], bg="#fff", w="180px", extra="text-align:left;"))
                 html.append(td(f"{int(r[COL_FRECUENCIA])} D", bg="#f5f5f5"))
-                inf  = resumen.get(rid, {}); ult = inf.get("ultimo_mtto"); prox = inf.get("proxima")
+                inf  = resumen.get(rid, {})
+                ult  = inf.get("ultimo_mtto"); prox = inf.get("proxima")
                 html.append(td(ult.strftime("%d/%m/%Y") if ult else "-", bg="#f5f5f5"))
-                html.append(td(prox["fecha_programada"].strftime("%d/%m/%Y") if prox else "-", bg="#fff3e0"))
+                html.append(td(prox["fecha_programada"].strftime("%d/%m/%Y") if prox else "-",
+                               bg="#fff3e0"))
 
                 acts = prog_df[prog_df["id_actividad"] == rid] if not prog_df.empty else prog_df
 
                 for d in semana:
                     bp, fg_p, tp = "#e7f1f8", "#000", ""
                     be, fg_e, te = "#fdf3e3", "#000", ""
-                    es_ultima = False; tip_p = ""; tip_e = ""
+                    es_ultima = False
+                    ev_prog = None
 
                     if not acts.empty:
                         m_prog = acts[acts["fecha_programada"].dt.date == d]
@@ -504,62 +624,83 @@ else:
                                       (acts["fecha_ejecucion"].dt.date == d)]
 
                         if not m_prog.empty:
-                            ev = m_prog.iloc[0]; es_ultima = bool(ev["es_ultima"]); estado = ev["estado"]
+                            ev = m_prog.iloc[0]
+                            ev_prog = ev
+                            es_ultima = bool(ev["es_ultima"])
+                            estado    = ev["estado"]
                             if estado == "ejecutado":
-                                col = semaforo_color(ev["desvio_pct"]) or C_VERDE
+                                col = semaforo_color(ev["desvio_pct"])
                                 bp, fg_p, tp = col, "#000", "X"
-                                fe  = ev["fecha_ejecucion"]; dev = ev["desvio_pct"]; com = ev["comentario"] or ""
-                                tip_p = (f"Prog: {d.strftime('%d/%m/%Y')} | "
-                                         f"Ejec: {fe.strftime('%d/%m/%Y') if fe else '-'}"
-                                         + (f" | Desvío: {dev:.1f}%" if dev is not None else "")
-                                         + (f" | {com}" if com else ""))
+                                botones_popup.append({
+                                    "rid": rid, "fecha": d,
+                                    "act": r[COL_ACTIVIDAD],
+                                    "comentario": ev["comentario"] or "",
+                                    "fe": ev["fecha_ejecucion"],
+                                    "dev": ev["desvio_pct"],
+                                    "wi": wi,
+                                })
                             elif estado == "programado":
                                 bp, fg_p, tp = C_PEND, "#fff", "X"
-                                tip_p = f"Programado: {d.strftime('%d/%m/%Y')}"
                             elif estado == "vencido":
                                 bp, fg_p, tp = C_ROJO, "#fff", "X"
-                                tip_p = f"Vencido: {d.strftime('%d/%m/%Y')}"
+
+                            if es_ultima and estado in ("programado", "vencido") and es_editor:
+                                botones_reg.append({
+                                    "rid": rid, "fp": ev["fecha_programada"],
+                                    "com": ev["comentario"] or "",
+                                    "act": r[COL_ACTIVIDAD], "wi": wi,
+                                })
 
                         if not m_ejec.empty:
-                            ev2 = m_ejec.iloc[0]; col2 = semaforo_color(ev2["desvio_pct"]) or C_VERDE
+                            ev2 = m_ejec.iloc[0]
+                            col2 = semaforo_color(ev2["desvio_pct"])
                             be, fg_e, te = col2, "#000", "X"
-                            com2 = ev2["comentario"] or ""; dev2 = ev2["desvio_pct"]
-                            fe2  = ev2["fecha_ejecucion"]
-                            tip_e = (f"Ejecutado: {fe2.strftime('%d/%m/%Y') if fe2 else '-'}"
-                                     + (f" | Desvío: {dev2:.1f}%" if dev2 is not None else "")
-                                     + (f" | 💬 {com2}" if com2 else ""))
-
-                    if es_ultima and not m_prog.empty and ev["estado"] in ("programado", "vencido"):
-                        botones_semana.append({
-                            "rid": rid, "fp": ev["fecha_programada"],
-                            "com": ev["comentario"] or "", "act": r[COL_ACTIVIDAD], "wi": wi
-                        })
 
                     borde_p = "3px solid #185fa5" if es_ultima else "1px solid #ccc"
-                    tt_p = f'title="{tip_p}"' if tip_p else ""
-                    tt_e = f'title="{tip_e}"' if tip_e else ""
-                    html.append(f'<td {tt_p} style="background:{bp};color:{fg_p};border:{borde_p};'
+                    html.append(f'<td style="background:{bp};color:{fg_p};border:{borde_p};'
                                 f'text-align:center;padding:3px 5px;font-weight:bold;">{tp}</td>')
-                    html.append(f'<td {tt_e} style="background:{be};color:{fg_e};border:1px solid #ccc;'
+                    html.append(f'<td style="background:{be};color:{fg_e};border:1px solid #ccc;'
                                 f'text-align:center;padding:3px 5px;font-weight:bold;">{te}</td>')
                 html.append('</tr>')
 
         html.append('</table></div>')
         st.markdown("".join(html), unsafe_allow_html=True)
 
-        if botones_semana and es_editor:
+        if botones_popup:
+            st.markdown("**💬 Ver detalle de ejecución:**")
+            cols_pop = st.columns(min(2, len(botones_popup)))
+            for bi, btn in enumerate(botones_popup):
+                nombre = btn["act"][:28] + ("…" if len(btn["act"]) > 28 else "")
+                fecha_str = btn["fecha"].strftime("%d/%m") if btn["fecha"] else ""
+                com_preview = (btn["comentario"][:20] + "…"
+                               if len(btn["comentario"]) > 20
+                               else btn["comentario"] or "Ver detalle")
+                with cols_pop[bi % 2]:
+                    if st.button(
+                        f"🟢 {nombre} ({fecha_str})\n{com_preview}",
+                        key=f"pop_{btn['rid']}_{btn['wi']}_{bi}",
+                        use_container_width=True
+                    ):
+                        st.session_state.popup_rid   = btn["rid"]
+                        st.session_state.popup_fecha = btn["fecha"]
+                        st.rerun()
+
+        if botones_reg and es_editor:
             st.markdown("**📝 Registrar ejecución:**")
-            cols_b = st.columns(min(3, len(botones_semana)))
-            for bi, btn in enumerate(botones_semana):
-                nombre = btn["act"][:35] + ("..." if len(btn["act"]) > 35 else "")
-                with cols_b[bi % 3]:
-                    if st.button(f"📝 {nombre}", key=f"btn_{btn['rid']}_{btn['wi']}",
-                                 use_container_width=True):
+            cols_b = st.columns(min(2, len(botones_reg)))
+            for bi, btn in enumerate(botones_reg):
+                nombre = btn["act"][:28] + ("…" if len(btn["act"]) > 28 else "")
+                with cols_b[bi % 2]:
+                    if st.button(
+                        f"📝 {nombre}",
+                        key=f"btn_{btn['rid']}_{btn['wi']}",
+                        use_container_width=True
+                    ):
                         st.session_state.modal_rid = btn["rid"]
                         st.session_state.modal_fp  = btn["fp"]
                         st.session_state.modal_com = btn["com"]
                         st.rerun()
-        elif botones_semana and not es_editor:
+        elif botones_reg and not es_editor:
             st.caption("👁️ Solo el editor puede registrar ejecuciones.")
 
         st.divider()
