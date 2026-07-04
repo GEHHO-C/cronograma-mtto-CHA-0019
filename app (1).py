@@ -40,9 +40,10 @@ st.markdown("""
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 /* ── Caja de comentario ────────────────────────────────── */
 .comentario-box {
-    background: #e8f5e9; border-left: 4px solid #2e7d32;
+    background: #1b5e20; border-left: 4px solid #69f0ae;
     padding: 10px 14px; border-radius: 6px;
     font-size: 13px; margin: 4px 0 8px 0;
+    color: #ffffff;
 }
 /* ── Anclas invisibles para scroll automático ─────────── */
 #modal-anchor { display: block; height: 0; }
