@@ -58,7 +58,7 @@ st.markdown("""
 # =========================================================
 # CONFIGURACIÓN
 # =========================================================
-DB             = "mi_basedatos.db"
+DB             = "CHA-0019-YA.db"
 
 import shutil, os
 _DB_ORIGEN  = DB
