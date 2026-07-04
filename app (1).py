@@ -40,12 +40,13 @@ st.markdown("""
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 /* ── Caja de comentario ────────────────────────────────── */
 .comentario-box {
-    background: #fff8e1; border-left: 4px solid #f5a623;
+    background: #e8f5e9; border-left: 4px solid #2e7d32;
     padding: 10px 14px; border-radius: 6px;
     font-size: 13px; margin: 4px 0 8px 0;
 }
-/* ── Ancla invisible para scroll al modal ─────────────── */
+/* ── Anclas invisibles para scroll automático ─────────── */
 #modal-anchor { display: block; height: 0; }
+#popup-anchor { display: block; height: 0; }
 .act-card { border: 1px solid #ddd; border-radius: 8px;
     padding: 10px 14px; margin-bottom: 8px; background: #fff; }
 .act-card-header { font-weight: 700; font-size: 13px;
@@ -436,6 +437,21 @@ if st.session_state.modal_rid is not None and es_editor:
 # POPUP DE COMENTARIO
 # =========================================================
 if st.session_state.popup_rid is not None:
+    # Scroll automático al popup igual que en el modal de registro
+    st.markdown('<div id="popup-anchor"></div>', unsafe_allow_html=True)
+    st.components.v1.html("""
+    <script>
+      window.onload = function() {
+        var anchor = window.parent.document.getElementById('popup-anchor');
+        if (anchor) {
+          anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+        } else {
+          window.parent.scrollTo({top: 0, behavior: 'smooth'});
+        }
+      };
+    </script>
+    """, height=0)
+
     rid_p   = st.session_state.popup_rid
     fecha_p = st.session_state.popup_fecha
     acts_p  = prog_df[prog_df["id_actividad"] == rid_p] if not prog_df.empty else prog_df
