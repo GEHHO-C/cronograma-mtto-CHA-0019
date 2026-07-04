@@ -14,7 +14,7 @@ st.set_page_config(page_title="Cronograma de mantenimiento", layout="wide")
 # =========================================================
 # CONFIGURACIÓN
 # =========================================================
-DB             = "mi_basedatos.db"
+DB             = "CHA-0019-YA.db"
 TABLA          = "Tabla1"
 YEAR           = 2026
 COL_TECNICA    = "Técnica de Mantenimiento"
@@ -23,14 +23,6 @@ COL_ACTIVIDAD  = "Actividad"
 COL_FRECUENCIA = "FRECUENCIA PROG"   # en días
 COL_EQUIPO     = "EQUIPO"
 SECCION        = "Chancado"
-
-fechas_base_lista = [
-    "16/01/2026", "16/01/2026", "16/01/2026", "16/01/2026", "16/01/2026",
-    "08/09/2021", "02/12/2025", "29/10/2025", "22/11/2023",
-    "21/08/2024", "03/06/2022", "24/04/2026", "03/11/2022",
-    "17/05/2026", "22/11/2025", "06/06/2025", "06/09/2023",
-    "14/06/2024", "24/04/2026", "24/02/2025", "25/05/2026"
-]
 
 USUARIOS = {
     "admin":   {"password": "mtto2026", "rol": "editor"},
@@ -84,6 +76,7 @@ es_editor = (st.session_state.rol == "editor")
 @st.cache_resource
 def get_conn():
     c = sqlite3.connect(DB, check_same_thread=False)
+    c.row_factory = sqlite3.Row
     c.execute("""CREATE TABLE IF NOT EXISTS ejecuciones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         id_actividad INTEGER, fecha_programada TEXT,
@@ -95,9 +88,19 @@ conn = get_conn()
 
 @st.cache_data(ttl=0)
 def load_df():
-    d = pd.read_sql(f"SELECT rowid,* FROM {TABLA}", conn)
-    fb = (fechas_base_lista + ["16/01/2026"] * max(0, len(d) - len(fechas_base_lista)))[:len(d)]
-    d["fecha_base"] = pd.to_datetime(fb, dayfirst=True)
+    # Usar sqlite3 nativo para máxima compatibilidad con Python 3.14+
+    cur = conn.execute(f"SELECT rowid AS rowid, * FROM {TABLA}")
+    cols = [desc[0] for desc in cur.description]
+    rows = cur.fetchall()
+    data = [dict(zip(cols, row)) for row in rows]
+    d = pd.DataFrame(data)
+    # Leer fecha base directamente de la columna "Ultimo Mtto" de la BD.
+    # Si una fila no tiene fecha, se usa el 1 de enero del año como fallback.
+    if "Ultimo Mtto" in d.columns:
+        d["fecha_base"] = pd.to_datetime(d["Ultimo Mtto"], errors="coerce")
+        d["fecha_base"] = d["fecha_base"].fillna(pd.Timestamp(YEAR, 1, 1))
+    else:
+        d["fecha_base"] = pd.Timestamp(YEAR, 1, 1)
     return d
 
 df = load_df()
@@ -117,10 +120,15 @@ EQUIPO_NOMBRE = get_equipo_nombre()
 # LÓGICA DE PROGRAMACIÓN
 # =========================================================
 def get_ejecuciones():
-    e = pd.read_sql("SELECT * FROM ejecuciones", conn)
-    if not e.empty:
-        e["fecha_programada"] = pd.to_datetime(e["fecha_programada"])
-        e["fecha_ejecucion"]  = pd.to_datetime(e["fecha_ejecucion"])
+    cur = conn.execute("SELECT * FROM ejecuciones")
+    cols = [desc[0] for desc in cur.description]
+    rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["id","id_actividad","fecha_programada",
+                                     "fecha_ejecucion","comentario"])
+    e = pd.DataFrame([dict(zip(cols, row)) for row in rows])
+    e["fecha_programada"] = pd.to_datetime(e["fecha_programada"], errors="coerce")
+    e["fecha_ejecucion"]  = pd.to_datetime(e["fecha_ejecucion"],  errors="coerce")
     return e
 
 def semaforo_color(pct):
@@ -132,15 +140,17 @@ def semaforo_color(pct):
 def generar_programacion(hoy):
     ejec_all = get_ejecuciones()
     prog_rows, resumen = [], {}
-    limite = pd.Timestamp(YEAR + 1, 12, 31)
-    HOY    = pd.Timestamp(hoy)
+    year_start = pd.Timestamp(YEAR, 1, 1)
+    limite     = pd.Timestamp(YEAR + 1, 12, 31)
+    HOY        = pd.Timestamp(hoy)
 
     for _, row in df.iterrows():
-        freq = int(row[COL_FRECUENCIA]); rid = row["rowid"]
+        freq = int(row[COL_FRECUENCIA]); rid = row.get("rowid", row.get("id", 0))
         base = pd.Timestamp(row["fecha_base"])
         ea   = ejec_all[ejec_all["id_actividad"] == rid].copy() if not ejec_all.empty else pd.DataFrame()
         bef  = max(base, ea["fecha_ejecucion"].max()) if not ea.empty else base
 
+        # ── EJECUCIONES REGISTRADAS POR EL USUARIO ───────────────
         hist = []
         if not ea.empty:
             for _, ej in ea.iterrows():
@@ -152,6 +162,46 @@ def generar_programacion(hoy):
                              "comentario": ej["comentario"],
                              "desvio_pct": (dp / freq * 100) if freq else 0})
 
+        # ── RETROCESO: último mtto + X anteriores hasta enero ──────
+        # Incluye la fecha base (último mtto real) como ejecutada,
+        # y retrocede iterativamente hasta cubrir desde enero.
+        # Todas aparecen en verde con comentario "Ejecutado correctamente".
+        retro = []
+
+        # Agregar la fecha base misma (último mtto) como ejecutada
+        if bef.year == YEAR:
+            retro.append({
+                "id_actividad": rid,
+                "fecha_programada": bef,
+                "estado": "ejecutado",
+                "fecha_ejecucion": bef,
+                "comentario": "Ejecutado correctamente",
+                "desvio_pct": 0.0,
+            })
+
+        # Retroceder iterativamente desde la base hasta enero
+        cur_retro = bef
+        s = 0
+        while s < 500:
+            cur_retro = cur_retro - pd.Timedelta(days=freq)
+            if cur_retro < year_start:
+                break
+            ya_en_hist = any(
+                abs((h["fecha_programada"] - cur_retro).days) <= 3
+                for h in hist
+            )
+            if not ya_en_hist:
+                retro.append({
+                    "id_actividad": rid,
+                    "fecha_programada": cur_retro,
+                    "estado": "ejecutado",
+                    "fecha_ejecucion": cur_retro,
+                    "comentario": "Ejecutado correctamente",
+                    "desvio_pct": 0.0,
+                })
+            s += 1
+
+        # ── EVENTOS FUTUROS: desde bef + freq hacia adelante ─────
         fut = []; cur = bef + pd.Timedelta(days=freq); s = 0
         while cur <= limite and s < 500:
             fut.append({"id_actividad": rid, "fecha_programada": cur,
@@ -159,7 +209,7 @@ def generar_programacion(hoy):
                         "fecha_ejecucion": None, "comentario": None, "desvio_pct": None})
             cur += pd.Timedelta(days=freq); s += 1
 
-        todos = sorted(hist + fut, key=lambda e: e["fecha_programada"])
+        todos = sorted(hist + retro + fut, key=lambda e: e["fecha_programada"])
         pf    = [e for e in fut if e["estado"] != "ejecutado"]
         prox  = pf[0] if pf else (fut[0] if fut else None)
 
@@ -205,7 +255,7 @@ SEMANAS = generar_semanas()
 # SESSION STATE
 # =========================================================
 for k, v in {"vista": "anual", "mes_idx": 0, "modal_rid": None,
-             "modal_fp": None, "modal_com": "", "hoy": dt.date(YEAR, 6, 12)}.items():
+             "modal_fp": None, "modal_com": "", "hoy": dt.date.today()}.items():
     if k not in st.session_state: st.session_state[k] = v
 
 # =========================================================
@@ -220,7 +270,7 @@ with st.sidebar:
         st.session_state.rol       = ""
         st.rerun()
     st.markdown("---")
-    hoy_input = st.date_input("📅 Fecha actual del sistema", value=st.session_state.hoy)
+    hoy_input = st.date_input("📅 Fecha actual del sistema", value=dt.date.today())
     st.session_state.hoy = hoy_input
     st.markdown("---")
     st.markdown("**Leyenda**")
