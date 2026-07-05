@@ -1,0 +1,29 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # Se ejecuta cada 11 horas (el límite de sleep es 12h)
+    - cron: "0 */11 * * *"
+  workflow_dispatch: {}  # permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Ping Streamlit app
+        env:
+          STREAMLIT_URL: "https://cronograma-mtto-cha-0019-sypmfynhwwrmomdv277ypw.streamlit.app/"
+        run: python keep_alive/ping.py
