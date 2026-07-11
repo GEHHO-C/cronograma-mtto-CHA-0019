@@ -4,7 +4,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 # Cambia esto por la URL de tu app
-STREAMLIT_URL = os.environ.get("STREAMLIT_URL", "https://tu-app.streamlit.app")
+STREAMLIT_URL = os.environ.get("STREAMLIT_URL", "https://cronograma-mtto-cha-0019-sypmfynhwwrmomdv277ypw.streamlit.app/")
 
 
 def main():
